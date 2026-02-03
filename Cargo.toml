@@ -1,5 +1,5 @@
 [package]
-name = "axp2101"
+name = "axp2101-rs"
 version = "0.3.0"
 edition = "2021"
 authors = ["Juraj Michálek <juraj.michalek@espressif.com>"]

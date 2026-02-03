@@ -2,7 +2,7 @@
 
 Rust driver for the AXP2101 power management IC (PMIC) used in M5Stack CoreS3 and similar ESP32-S3 development boards.
 
-[![crates.io](https://img.shields.io/crates/v/axp2101.svg)](https://crates.io/crates/axp2101)
+[![crates.io](https://img.shields.io/crates/v/axp2101-rs.svg)](https://crates.io/crates/axp2101-rs)
 [![docs.rs](https://docs.rs/axp2101/badge.svg)](https://docs.rs/axp2101/)
 ![MSRV](https://img.shields.io/badge/MSRV--success--green&style=flat-square)
 
@@ -49,7 +49,7 @@ The AXP2101 is a single-cell NVDC PMU (Power Management Unit) with e-gauge capab
 ### Basic Initialization
 
 ```rust,ignore
-use axp2101::{Axp2101, I2CPowerManagementInterface};
+use axp2101_rs::{Axp2101, I2CPowerManagementInterface};
 
 // Initialize with M5Stack CoreS3 defaults
 let i2c = /* your I2C implementation */;
