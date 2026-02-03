@@ -106,19 +106,30 @@ const AXP2101_CHG_LED: u8 = 0x69;
 const AXP2101_ALDO_ENABLE: u8 = 0x90;
 const AXP2101_ALDO4: u8 = 0x95;
 
-//12, 25-28, 92-93
+/// Commands for AXP2101 power management IC
+///
+/// Register 0x12 (DCDC13_LDO23_CONTROL) bits:
+/// - Bit 0: DCDC1 enable
+/// - Bit 1: DCDC3 enable
+/// - Bit 2: LDO2 enable
+/// - Bit 3: LDO3 enable
+///
+/// For M5Stack CoreS3, DCDC3 (bit 1) powers the BMI270 IMU and should be enabled.
+#[derive(Debug, Clone, Copy)]
 pub enum Command {
+    /// Enable/disable charging LED
     ChgLed(bool),
+
+    /// Enable/disable all ALDO outputs (writes to ALDO_ENABLE register at 0x90)
     AldoEnable(bool),
+
+    /// Enable/disable ALDO4 output (for LCD/Touch/TF-card on CoreS3)
     Aldo4(bool),
-    // ExtenDcdc2Control(bool),
-    // Dcdc13Ldo23Control(bool),
-    // Dcdc2Slope(bool),
-    // Dcdc1Voltage(bool),
-    // Dcdc3Voltage(bool),
-    // Ldo23Voltage(bool),
-    // Gpio1Control(bool),
-    // Gpio2Control(bool),
+
+    /// Enable DCDC1, DCDC3, LDO2, LDO3 regulators
+    /// Value is a bitmask where bit 0=DCDC1, bit 1=DCDC3, bit 2=LDO2, bit 3=LDO3
+    /// For M5Stack CoreS3 with BMI270 IMU, use 0b00000010 to enable DCDC3
+    Dcdc13Ldo23Control(u8),
 }
 
 pub enum DataFormat<'a> {
@@ -127,23 +138,29 @@ pub enum DataFormat<'a> {
 }
 
 impl Command {
-    // Send command to AXP2101
+    /// Send command to AXP2101 via I2C
     pub fn send<I>(self, iface: &mut I) -> Result<(), Axp2101Error>
     where
         I: Axp2101ReadWrite,
     {
         let (data, len) = match self {
-            // Command structure: address, command, data, count & 0xf1
-            //Command::Dcdc3Voltage(on) => ([AXP2101_ADDRESS, AXP2101_LDO2 , 0x0], 3),
+            // Command structure: [register_address, value_to_write]
+
+            // Charging LED control (register 0x69)
             Command::ChgLed(_on) => ([AXP2101_CHG_LED, 0b00110101], 2),
+
+            // ALDO enable register (0x90) - 0xBF enables multiple ALDO outputs
             Command::AldoEnable(_on) => ([AXP2101_ALDO_ENABLE, 0xBF], 2),
+
+            // ALDO4 control (register 0x95 = GPIO43_FUNCTION_CONTROL)
+            // 0b00011100 enables ALDO4
             Command::Aldo4(_on) => ([AXP2101_ALDO4, 0b00011100], 2),
-            // Command::Dcdc2Slope(_on) => ([AXP2101_DCDC2_SLOPE, 0x0], 2),
-            // Command::Dcdc1Voltage(_on) => ([AXP2101_DCDC1_VOLTAGE, 106], 2),
-            // Command::Dcdc3Voltage(_on) => ([AXP2101_DCDC3_VOLTAGE, 104], 2),
-            // Command::Ldo23Voltage(_on) => ([AXP2101_LDO23_VOLTAGE, 242], 2),
-            // Command::Gpio1Control(_on) => ([AXP2101_GPIO1_CONTROL, 0x0], 2),
-            // Command::Gpio2Control(_on) => ([AXP2101_GPIO2_CONTROL, 104], 2),
+
+            // DCDC1/DCDC3/LDO2/LDO3 control register (0x12)
+            // Bitmask: bit 0=DCDC1, bit 1=DCDC3, bit 2=LDO2, bit 3=LDO3
+            // For CoreS3 BMI270 IMU: enable DCDC3 (0b00000010)
+            // For all regulators: 0b00001111 (DCDC1+DCDC3+LDO2+LDO3)
+            Command::Dcdc13Ldo23Control(mask) => ([AXP2101_DCDC13_LDO23_CONTROL, mask], 2),
         };
         iface.send_commands(DataFormat::U8(&data[0..len]))
     }
@@ -159,8 +176,6 @@ pub enum Axp2101Error {
 
 pub trait Axp2101ReadWrite {
     fn send_commands(&mut self, cmd: DataFormat<'_>) -> Result<(), Axp2101Error>;
-    // fn read(&self, addr: u8, reg: u8, buffer: &mut [u8]) -> Result<(), Axp2101Error>;
-    // fn write(&self, addr: u8, reg: u8, buffer: &[u8]) -> Result<(), Axp2101Error>;
 }
 
 pub struct Axp2101<I> {
@@ -178,12 +193,10 @@ where
 
         match cmd {
             DataFormat::U8(data) => {
-                self.i2c
-                    .write_read(self.addr, &[data[0]], &mut data_buf)
-                    .map_err(|_| Axp2101Error::WriteError)?;
-                //println!("read value for command {:?}: {:?}", data[0], data_buf[0]);
+                // Read current register value (optional, for verification)
+                let _ = self.i2c.write_read(self.addr, &[data[0]], &mut data_buf);
 
-                //println!("write value for command {:?}: {:?}", data[0], data[1]);
+                // Write new value
                 self.i2c
                     .write(self.addr, data)
                     .map_err(|_| Axp2101Error::WriteError)
@@ -196,29 +209,58 @@ impl<I> Axp2101<I>
 where
     I: Axp2101ReadWrite,
 {
-    // Create a new AXP2101 interface
+    /// Create a new AXP2101 driver instance
     pub fn new(interface: I) -> Self {
         Self { interface }
     }
 
-    // Initialize AXP2101
+    /// Initialize AXP2101 with default settings for M5Stack CoreS3
+    ///
+    /// This enables:
+    /// - Charging LED
+    /// - ALDO outputs (for LCD/Touch/TF-card)
+    /// - ALDO4 (specific output)
+    /// - DCDC3 (powers BMI270 IMU and other peripherals)
     pub fn init(&mut self) -> Result<(), Axp2101Error> {
-        // Command::Ldo23Voltage(true).send(&mut self.interface)?;
+        // Enable charging LED
         Command::ChgLed(true).send(&mut self.interface)?;
+
+        // Enable ALDO outputs (LCD, Touch, etc.)
         Command::AldoEnable(true).send(&mut self.interface)?;
+
+        // Enable ALDO4
         Command::Aldo4(true).send(&mut self.interface)?;
 
-        // Command::Dcdc2Slope(true).send(&mut self.interface)?;
-        // Command::Dcdc1Voltage(true).send(&mut self.interface)?;
-        // Command::Dcdc3Voltage(true).send(&mut self.interface)?;
-        // Command::Ldo23Voltage(true).send(&mut self.interface)?;
-        // Command::Gpio1Control(true).send(&mut self.interface)?;
-        // Command::Gpio2Control(true).send(&mut self.interface)?;
-        // Command::ExtenDcdc2Control(true).send(&mut self.interface)?;
+        // Enable DCDC3 - CRITICAL for M5Stack CoreS3!
+        // DCDC3 powers the BMI270 IMU and other 3.3V peripherals
+        // Bit 1 of register 0x12 = DCDC3 enable
+        Command::Dcdc13Ldo23Control(0b00000010).send(&mut self.interface)?;
 
         Ok(())
     }
 
+    /// Enable DCDC1, DCDC3, LDO2, and/or LDO3 regulators
+    ///
+    /// # Arguments
+    /// * `mask` - Bitmask where:
+    ///   - Bit 0: DCDC1 enable
+    ///   - Bit 1: DCDC3 enable (IMU power on M5Stack CoreS3)
+    ///   - Bit 2: LDO2 enable
+    ///   - Bit 3: LDO3 enable
+    ///
+    /// # Example
+    /// ```ignore
+    /// // Enable DCDC3 only (for BMI270 IMU)
+    /// axp.set_dcdc13_ldo23_control(0b00000010)?;
+    ///
+    /// // Enable all DCDC and LDO outputs
+    /// axp.set_dcdc13_ldo23_control(0b00001111)?;
+    /// ```
+    pub fn set_dcdc13_ldo23_control(&mut self, mask: u8) -> Result<(), Axp2101Error> {
+        Command::Dcdc13Ldo23Control(mask).send(&mut self.interface)
+    }
+
+    /// Release the I2C interface, returning ownership of the underlying I2C peripheral
     pub fn release_i2c<I2C>(self) -> I2C
     where
         I: Into<I2CPowerManagementInterface<I2C>>,
@@ -229,7 +271,7 @@ where
     }
 }
 
-// Add this implementation to your lib.rs file in the axp2101-rs crate
+// Implement Axp2101ReadWrite for I2CPowerManagementInterface
 impl<I2C> Axp2101ReadWrite for I2CPowerManagementInterface<I2C>
 where
     I2C: embedded_hal::i2c::I2c,
@@ -239,10 +281,12 @@ where
 
         match cmd {
             DataFormat::U8(data) => {
-                self.i2c
-                    .write_read(AXP2101_ADDRESS, &[data[0]], &mut data_buf)
-                    .map_err(|_| Axp2101Error::WriteError)?;
+                // Read current register value (optional, for verification)
+                let _ = self
+                    .i2c
+                    .write_read(AXP2101_ADDRESS, &[data[0]], &mut data_buf);
 
+                // Write new value
                 self.i2c
                     .write(AXP2101_ADDRESS, data)
                     .map_err(|_| Axp2101Error::WriteError)
@@ -261,7 +305,7 @@ impl<I2C> I2CInterface<I2C>
 where
     I2C: embedded_hal::i2c::I2c,
 {
-    /// Create new I2C interface for communication with a display driver
+    /// Create new I2C interface for communication
     pub fn new(i2c: I2C, addr: u8, data_byte: u8) -> Self {
         Self {
             i2c,
@@ -270,8 +314,7 @@ where
         }
     }
 
-    /// Consume the display interface and return
-    /// the underlying peripherial driver
+    /// Consume the interface and return the underlying I2C peripheral
     pub fn release(self) -> I2C {
         self.i2c
     }
@@ -286,10 +329,12 @@ impl<I2C> I2CPowerManagementInterface<I2C>
 where
     I2C: embedded_hal::i2c::I2c,
 {
+    /// Create new power management interface
     pub fn new(i2c: I2C) -> Self {
         Self { i2c }
     }
 
+    /// Consume the interface and return the underlying I2C peripheral
     pub fn release(self) -> I2C {
         self.i2c
     }
